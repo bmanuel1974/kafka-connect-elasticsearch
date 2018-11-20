@@ -84,6 +84,10 @@ public class ElasticsearchSinkConnectorConfig extends AbstractConfig {
   public static final String TYPE_NAME_CONFIG = "type.name";
   private static final String TYPE_NAME_DOC = "The Elasticsearch type name to use when indexing.";
 
+  public static final String PIPELINE_NAME = "pipeline.name";
+  private static final String PIPELINE_NAME_DOC =
+          "The Elasticsearch pipeline name to use when indexing.";
+
   @Deprecated
   public static final String TOPIC_INDEX_MAP_CONFIG = "topic.index.map";
   private static final String TOPIC_INDEX_MAP_DOC =
@@ -119,7 +123,7 @@ public class ElasticsearchSinkConnectorConfig extends AbstractConfig {
   public static final String COMPACT_MAP_ENTRIES_CONFIG = "compact.map.entries";
   private static final String COMPACT_MAP_ENTRIES_DOC =
       "Defines how map entries with string keys within record values should be written to JSON. "
-      + "When this is set to ``true``, these entries are written compactly as "
+              + "When this is set to ``true``, these entries are written compactly as "
       + "``\"entryKey\": \"entryValue\"``. "
       + "Otherwise, map entries with string keys are written as a nested document "
       + "``{\"key\": \"entryKey\", \"value\": \"entryValue\"}``. "
@@ -292,6 +296,16 @@ public class ElasticsearchSinkConnectorConfig extends AbstractConfig {
         ++order,
         Width.SHORT,
         "Type Name"
+    ).define(
+            PIPELINE_NAME,
+            Type.STRING,
+            "",
+            Importance.LOW,
+            PIPELINE_NAME_DOC,
+            group,
+            ++order,
+            Width.SHORT,
+           "Pipeline name"
     ).define(
         KEY_IGNORE_CONFIG,
         Type.BOOLEAN,

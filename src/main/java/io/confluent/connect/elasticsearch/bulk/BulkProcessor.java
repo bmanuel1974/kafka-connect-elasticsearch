@@ -57,6 +57,7 @@ public class BulkProcessor<R, B> {
   private final int maxRetries;
   private final long retryBackoffMs;
   private final BehaviorOnMalformedDoc behaviorOnMalformedDoc;
+  private final String pipelineName;
 
   private final Thread farmer;
   private final ExecutorService executor;
@@ -81,7 +82,8 @@ public class BulkProcessor<R, B> {
       long lingerMs,
       int maxRetries,
       long retryBackoffMs,
-      BehaviorOnMalformedDoc behaviorOnMalformedDoc
+      BehaviorOnMalformedDoc behaviorOnMalformedDoc,
+      String pipelineName
   ) {
     this.time = time;
     this.bulkClient = bulkClient;
@@ -91,6 +93,7 @@ public class BulkProcessor<R, B> {
     this.maxRetries = maxRetries;
     this.retryBackoffMs = retryBackoffMs;
     this.behaviorOnMalformedDoc = behaviorOnMalformedDoc;
+    this.pipelineName = pipelineName;
 
     unsentRecords = new ArrayDeque<>(maxBufferedRecords);
 
@@ -354,7 +357,7 @@ public class BulkProcessor<R, B> {
     private BulkResponse execute() throws Exception {
       final B bulkReq;
       try {
-        bulkReq = bulkClient.bulkRequest(batch);
+        bulkReq = bulkClient.bulkRequest(batch, pipelineName);
       } catch (Exception e) {
         log.error(
             "Failed to create bulk request from batch {} of {} records",
