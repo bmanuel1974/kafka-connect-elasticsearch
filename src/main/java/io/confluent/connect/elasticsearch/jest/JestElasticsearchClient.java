@@ -275,8 +275,12 @@ public class JestElasticsearchClient implements ElasticsearchClient {
     return mappingsJson.getAsJsonObject(type);
   }
 
-  public BulkRequest createBulkRequest(List<IndexableRecord> batch) {
+  public BulkRequest createBulkRequest(List<IndexableRecord> batch, String pipeline) {
     final Bulk.Builder builder = new Bulk.Builder();
+    if (pipeline != null && pipeline.length() > 0) {
+      builder.setParameter("pipeline", pipeline);
+    }
+
     for (IndexableRecord record : batch) {
       builder.addAction(toBulkableAction(record));
     }

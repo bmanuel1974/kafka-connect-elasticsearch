@@ -32,8 +32,8 @@ public class BulkIndexingClient implements BulkClient<IndexableRecord, BulkReque
   }
 
   @Override
-  public BulkRequest bulkRequest(List<IndexableRecord> batch) {
-    return client.createBulkRequest(batch);
+  public BulkRequest bulkRequest(List<IndexableRecord> batch, String pipelineName) {
+    return client.createBulkRequest(batch, pipelineName);
   }
 
   @Override

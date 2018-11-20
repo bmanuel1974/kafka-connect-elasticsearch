@@ -21,7 +21,7 @@ import java.util.List;
 
 public interface BulkClient<R, B> {
 
-  B bulkRequest(List<R> batch);
+  B bulkRequest(List<R> batch, String pipelineName);
 
   BulkResponse execute(B req) throws IOException;
 

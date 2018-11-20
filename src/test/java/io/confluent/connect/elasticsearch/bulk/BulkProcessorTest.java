@@ -53,7 +53,7 @@ public class BulkProcessorTest {
     private volatile boolean executeMetExpectations = true;
 
     @Override
-    public List<Integer> bulkRequest(List<Integer> batch) {
+    public List<Integer> bulkRequest(List<Integer> batch, String piplineName) {
       List<Integer> ids = new ArrayList<>(batch.size());
       for (Integer id : batch) {
         ids.add(id);
@@ -115,7 +115,8 @@ public class BulkProcessorTest {
         lingerMs,
         maxRetries,
         retryBackoffMs,
-        behaviorOnMalformedDoc
+        behaviorOnMalformedDoc,
+            null
     );
 
     final int addTimeoutMs = 10;
@@ -159,7 +160,8 @@ public class BulkProcessorTest {
         lingerMs,
         maxRetries,
         retryBackoffMs,
-        behaviorOnMalformedDoc
+        behaviorOnMalformedDoc,
+            null
     );
 
     client.expect(Arrays.asList(1, 2, 3), BulkResponse.success());
@@ -196,7 +198,8 @@ public class BulkProcessorTest {
         lingerMs,
         maxRetries,
         retryBackoffMs,
-        behaviorOnMalformedDoc
+        behaviorOnMalformedDoc,
+null
     );
 
     final int addTimeoutMs = 10;
@@ -233,7 +236,8 @@ public class BulkProcessorTest {
         lingerMs,
         maxRetries,
         retryBackoffMs,
-        behaviorOnMalformedDoc
+        behaviorOnMalformedDoc,
+            null
     );
 
     final int addTimeoutMs = 10;
@@ -267,7 +271,8 @@ public class BulkProcessorTest {
         lingerMs,
         maxRetries,
         retryBackoffMs,
-        behaviorOnMalformedDoc
+        behaviorOnMalformedDoc,
+            null
     );
 
     final int addTimeoutMs = 10;
@@ -304,7 +309,8 @@ public class BulkProcessorTest {
         lingerMs,
         maxRetries,
         retryBackoffMs,
-        behaviorOnMalformedDoc
+        behaviorOnMalformedDoc,
+            null
     );
 
     final int addTimeoutMs = 10;
@@ -343,7 +349,8 @@ public class BulkProcessorTest {
         lingerMs,
         maxRetries,
         retryBackoffMs,
-        behaviorOnMalformedDoc
+        behaviorOnMalformedDoc,
+            null
     );
 
     bulkProcessor.start();
@@ -394,7 +401,8 @@ public class BulkProcessorTest {
           lingerMs,
           maxRetries,
           retryBackoffMs,
-          behaviorOnMalformedDoc
+          behaviorOnMalformedDoc,
+              null
       );
 
       bulkProcessor.start();

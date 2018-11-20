@@ -51,6 +51,7 @@ public class ElasticsearchWriter {
   private final boolean dropInvalidMessage;
   private final BehaviorOnNullValues behaviorOnNullValues;
   private final DataConverter converter;
+  private final String pipelineName;
 
   private final Set<String> existingMappings;
   private final BehaviorOnMalformedDoc behaviorOnMalformedDoc;
@@ -73,7 +74,8 @@ public class ElasticsearchWriter {
       long retryBackoffMs,
       boolean dropInvalidMessage,
       BehaviorOnNullValues behaviorOnNullValues,
-      BehaviorOnMalformedDoc behaviorOnMalformedDoc
+      BehaviorOnMalformedDoc behaviorOnMalformedDoc,
+      String pipelineName
   ) {
     this.client = client;
     this.type = type;
@@ -87,6 +89,7 @@ public class ElasticsearchWriter {
     this.behaviorOnNullValues = behaviorOnNullValues;
     this.converter = new DataConverter(useCompactMapEntries, behaviorOnNullValues);
     this.behaviorOnMalformedDoc = behaviorOnMalformedDoc;
+    this.pipelineName = pipelineName;
 
     bulkProcessor = new BulkProcessor<>(
         new SystemTime(),
@@ -97,7 +100,8 @@ public class ElasticsearchWriter {
         lingerMs,
         maxRetries,
         retryBackoffMs,
-        behaviorOnMalformedDoc
+        behaviorOnMalformedDoc,
+        pipelineName
     );
 
     existingMappings = new HashSet<>();
@@ -122,6 +126,7 @@ public class ElasticsearchWriter {
     private boolean dropInvalidMessage;
     private BehaviorOnNullValues behaviorOnNullValues = BehaviorOnNullValues.DEFAULT;
     private BehaviorOnMalformedDoc behaviorOnMalformedDoc;
+    private String pipelineName;
 
     public Builder(ElasticsearchClient client) {
       this.client = client;
@@ -151,6 +156,11 @@ public class ElasticsearchWriter {
 
     public Builder setTopicToIndexMap(Map<String, String> topicToIndexMap) {
       this.topicToIndexMap = topicToIndexMap;
+      return this;
+    }
+
+    public Builder setPipelineName(String pipelineName) {
+      this.pipelineName = pipelineName;
       return this;
     }
 
@@ -230,7 +240,8 @@ public class ElasticsearchWriter {
           retryBackoffMs,
           dropInvalidMessage,
           behaviorOnNullValues,
-          behaviorOnMalformedDoc
+          behaviorOnMalformedDoc,
+          pipelineName
       );
     }
   }

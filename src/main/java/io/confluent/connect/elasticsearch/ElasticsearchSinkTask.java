@@ -92,6 +92,8 @@ public class ElasticsearchSinkTask extends SinkTask {
       boolean dropInvalidMessage =
           config.getBoolean(ElasticsearchSinkConnectorConfig.DROP_INVALID_MESSAGE_CONFIG);
 
+      String pipelineName = config.getString(ElasticsearchSinkConnectorConfig.PIPELINE_NAME);
+
       DataConverter.BehaviorOnNullValues behaviorOnNullValues =
           DataConverter.BehaviorOnNullValues.forValue(
               config.getString(ElasticsearchSinkConnectorConfig.BEHAVIOR_ON_NULL_VALUES_CONFIG)
@@ -135,9 +137,12 @@ public class ElasticsearchSinkTask extends SinkTask {
           .setMaxRetry(maxRetry)
           .setDropInvalidMessage(dropInvalidMessage)
           .setBehaviorOnNullValues(behaviorOnNullValues)
-          .setBehaviorOnMalformedDoc(behaviorOnMalformedDoc);
+          .setBehaviorOnMalformedDoc(behaviorOnMalformedDoc)
+              .setPipelineName(pipelineName);
+
 
       writer = builder.build();
+
       writer.start();
     } catch (ConfigException e) {
       throw new ConnectException(

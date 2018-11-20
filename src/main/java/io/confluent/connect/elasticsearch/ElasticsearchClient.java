@@ -70,7 +70,7 @@ public interface ElasticsearchClient extends AutoCloseable {
    * @param batch the list of records
    * @return the bulk request
    */
-  BulkRequest createBulkRequest(List<IndexableRecord> batch);
+  BulkRequest createBulkRequest(List<IndexableRecord> batch, String pipelineName);
 
   /**
    * Executes a bulk action.
