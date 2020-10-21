@@ -1,18 +1,17 @@
-/**
- * Copyright 2016 Confluent Inc.
+/*
+ * Copyright 2018 Confluent Inc.
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not
- * use this file except in compliance with the License. You may obtain a copy of
- * the License at
+ * Licensed under the Confluent Community License (the "License"); you may not use
+ * this file except in compliance with the License.  You may obtain a copy of the
+ * License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.confluent.io/confluent-community-license
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
- * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
- * License for the specific language governing permissions and limitations under
- * the License.
- **/
+ * WARRANTIES OF ANY KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations under the License.
+ */
 
 package io.confluent.connect.elasticsearch;
 
@@ -31,6 +30,8 @@ import org.apache.kafka.connect.errors.DataException;
 import org.apache.kafka.connect.json.JsonConverter;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.storage.Converter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -48,6 +49,7 @@ import static io.confluent.connect.elasticsearch.ElasticsearchSinkConnectorConst
 
 public class DataConverter {
 
+  private static final Logger log = LoggerFactory.getLogger(DataConverter.class);
   private static final Converter JSON_CONVERTER;
 
   static {
@@ -116,6 +118,12 @@ public class DataConverter {
     if (record.value() == null) {
       switch (behaviorOnNullValues) {
         case IGNORE:
+          log.trace(
+              "Ignoring record with null value at topic '{}', partition {}, offset {}",
+              record.topic(),
+              record.kafkaPartition(),
+              record.kafkaOffset()
+          );
           return null;
         case DELETE:
           if (record.key() == null) {
@@ -126,9 +134,22 @@ public class DataConverter {
             // offset information for the SinkRecord. Since that information is guaranteed to be
             // unique per message, we can be confident that there wouldn't be any corresponding
             // index present in ES to delete anyways.
+            log.trace(
+                "Ignoring record with null key at topic '{}', partition {}, offset {}, since "
+                + "the record key is used as the ID of the index",
+                record.topic(),
+                record.kafkaPartition(),
+                record.kafkaOffset()
+            );
             return null;
           }
           // Will proceed as normal, ultimately creating an IndexableRecord with a null payload
+          log.trace(
+              "Deleting from Elasticsearch record at topic '{}', partition {}, offset {}",
+              record.topic(),
+              record.kafkaPartition(),
+              record.kafkaOffset()
+          );
           break;
         case FAIL:
           throw new DataException(String.format(
@@ -323,7 +344,7 @@ public class DataConverter {
   }
 
   private Object preProcessArrayValue(Object value, Schema schema, Schema newSchema) {
-    Collection collection = (Collection) value;
+    Collection<?> collection = (Collection<?>) value;
     List<Object> result = new ArrayList<>();
     for (Object element: collection) {
       result.add(preProcessValue(element, schema.valueSchema(), newSchema.valueSchema()));
@@ -405,10 +426,6 @@ public class DataConverter {
       }
 
       return result;
-    }
-
-    public static BehaviorOnNullValues forValue(String value) {
-      return valueOf(value.toUpperCase(Locale.ROOT));
     }
 
     @Override

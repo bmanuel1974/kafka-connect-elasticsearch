@@ -1,18 +1,17 @@
-/**
+/*
  * Copyright 2018 Confluent Inc.
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not
- * use this file except in compliance with the License. You may obtain a copy of
- * the License at
+ * Licensed under the Confluent Community License (the "License"); you may not use
+ * this file except in compliance with the License.  You may obtain a copy of the
+ * License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.confluent.io/confluent-community-license
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
- * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
- * License for the specific language governing permissions and limitations under
- * the License.
- **/
+ * WARRANTIES OF ANY KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations under the License.
+ */
 
 package io.confluent.connect.elasticsearch.jest;
 
@@ -27,31 +26,43 @@ import io.confluent.connect.elasticsearch.IndexableRecord;
 import io.confluent.connect.elasticsearch.Key;
 import io.confluent.connect.elasticsearch.Mapping;
 import io.confluent.connect.elasticsearch.bulk.BulkRequest;
+import io.searchbox.action.BulkableAction;
 import io.searchbox.client.JestClient;
 import io.searchbox.client.JestClientFactory;
 import io.searchbox.client.JestResult;
+import io.searchbox.client.config.ElasticsearchVersion;
 import io.searchbox.client.config.HttpClientConfig;
 import io.searchbox.cluster.NodesInfo;
 import io.searchbox.core.BulkResult;
+import io.searchbox.core.Delete;
+import io.searchbox.core.DocumentResult;
+import io.searchbox.core.Index;
 import io.searchbox.core.Search;
 import io.searchbox.core.SearchResult;
+import io.searchbox.core.Update;
 import io.searchbox.indices.CreateIndex;
 import io.searchbox.indices.IndicesExists;
 import io.searchbox.indices.mapping.GetMapping;
 import io.searchbox.indices.mapping.PutMapping;
+import java.io.IOException;
 import org.apache.http.HttpHost;
 import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.Credentials;
 import org.apache.http.client.CredentialsProvider;
+import org.apache.http.conn.routing.HttpRoutePlanner;
+import org.apache.http.impl.conn.DefaultProxyRoutePlanner;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.errors.ConnectException;
+import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatcher;
 import org.mockito.InOrder;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -63,10 +74,14 @@ import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.equalTo;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 public class JestElasticsearchClientTest {
@@ -118,6 +133,57 @@ public class JestElasticsearchClientTest {
   }
 
   @Test
+  public void connectsWithProxy() throws NoSuchFieldException, IllegalAccessException {
+    Map<String, String> props = new HashMap<>();
+    props.put(ElasticsearchSinkConnectorConfig.CONNECTION_URL_CONFIG, "http://localhost:9200");
+    props.put(ElasticsearchSinkConnectorConfig.PROXY_HOST_CONFIG, "myproxy");
+    props.put(ElasticsearchSinkConnectorConfig.PROXY_PORT_CONFIG, "443");
+    props.put(ElasticsearchSinkConnectorConfig.PROXY_USERNAME_CONFIG, "username");
+    props.put(ElasticsearchSinkConnectorConfig.PROXY_PASSWORD_CONFIG, "password");
+
+    props.put(ElasticsearchSinkConnectorConfig.TYPE_NAME_CONFIG, "kafka-connect");
+    JestElasticsearchClient client = new JestElasticsearchClient(props, jestClientFactory);
+
+    ArgumentCaptor<HttpClientConfig> captor = ArgumentCaptor.forClass(HttpClientConfig.class);
+    verify(jestClientFactory).setHttpClientConfig(captor.capture());
+    HttpClientConfig httpClientConfig = captor.getValue();
+    HttpRoutePlanner routePlanner = httpClientConfig.getHttpRoutePlanner();
+
+    assertTrue(routePlanner instanceof DefaultProxyRoutePlanner);
+    DefaultProxyRoutePlanner proxyRoutePlanner = (DefaultProxyRoutePlanner) routePlanner;
+
+    Field f = proxyRoutePlanner.getClass().getDeclaredField("proxy");
+    f.setAccessible(true);
+    HttpHost httpProxy = (HttpHost) f.get(proxyRoutePlanner);
+
+    assertEquals("http", httpProxy.getSchemeName());
+    assertEquals("myproxy", httpProxy.getHostName());
+    assertEquals(443, httpProxy.getPort());
+
+    Credentials credentials = httpClientConfig
+        .getCredentialsProvider()
+        .getCredentials(new AuthScope(httpProxy));
+
+    assertEquals("password", credentials.getPassword());
+  }
+
+  @Test
+  public void compressedConnectsSecurely() {
+    Map<String, String> props = new HashMap<>();
+    props.put(ElasticsearchSinkConnectorConfig.CONNECTION_URL_CONFIG, "http://localhost:9200");
+    props.put(ElasticsearchSinkConnectorConfig.CONNECTION_USERNAME_CONFIG, "elastic");
+    props.put(ElasticsearchSinkConnectorConfig.CONNECTION_PASSWORD_CONFIG, "elasticpw");
+    props.put(ElasticsearchSinkConnectorConfig.TYPE_NAME_CONFIG, "kafka-connect");
+    props.put(ElasticsearchSinkConnectorConfig.CONNECTION_COMPRESSION_CONFIG, "true");
+    JestElasticsearchClient client = new JestElasticsearchClient(props, jestClientFactory);
+
+    ArgumentCaptor<HttpClientConfig> captor = ArgumentCaptor.forClass(HttpClientConfig.class);
+    verify(jestClientFactory).setHttpClientConfig(captor.capture());
+    HttpClientConfig httpClientConfig = captor.getValue();
+    assertTrue(httpClientConfig.isRequestCompressionEnabled());
+  }
+
+  @Test
   public void connectsSecurelyWithEmptyUsernameAndPassword() {
     Map<String, String> props = new HashMap<>();
     props.put(ElasticsearchSinkConnectorConfig.CONNECTION_URL_CONFIG, "http://localhost:9200");
@@ -141,6 +207,23 @@ public class JestElasticsearchClientTest {
   public void getsVersion() {
     JestElasticsearchClient client = new JestElasticsearchClient(jestClient);
     assertThat(client.getVersion(), is(equalTo(ElasticsearchClient.Version.ES_V1)));
+  }
+
+  @Test
+  public void attemptToCreateExistingIndex() throws Exception {
+    JestElasticsearchClient client = new JestElasticsearchClient(jestClient);
+    JestResult success = new JestResult(new Gson());
+    success.setSucceeded(true);
+    IndicesExists indicesExists = new IndicesExists.Builder(INDEX).build();
+    when(jestClient.execute(indicesExists)).thenReturn(success);
+    when(jestClient.execute(argThat(isCreateIndexForTestIndex()))).thenReturn(success);
+
+    client.createIndices(Collections.singleton(INDEX));
+    InOrder inOrder = inOrder(jestClient);
+    inOrder.verify(jestClient).execute(info);
+    inOrder.verify(jestClient).execute(indicesExists);
+
+    verifyNoMoreInteractions(jestClient);
   }
 
   @Test
@@ -168,7 +251,7 @@ public class JestElasticsearchClientTest {
       @Override
       public boolean matches(CreateIndex createIndex) {
         // check the URI as the equals method on CreateIndex doesn't work
-        return createIndex.getURI().equals(INDEX);
+        return createIndex.getURI(ElasticsearchVersion.V2).equals(INDEX);
       }
     };
   }
@@ -312,11 +395,40 @@ public class JestElasticsearchClientTest {
   }
 
   @Test
-  public void closes() {
+  public void closes() throws IOException {
     JestElasticsearchClient client = new JestElasticsearchClient(jestClient);
     client.close();
 
-    verify(jestClient).shutdownClient();
+    verify(jestClient).close();
+  }
+
+  @Test
+  public void toBulkableAction(){
+    JestElasticsearchClient client = new JestElasticsearchClient(jestClient);
+    IndexableRecord del = new IndexableRecord(new Key("idx", "tp", "xxx"), null, 1L);
+    BulkableAction<DocumentResult> ba = client.toBulkableAction(del);
+    assertNotNull(ba);
+    assertSame(Delete.class, ba.getClass());
+    assertEquals(del.key.index, ba.getIndex());
+    assertEquals(del.key.id, ba.getId());
+    assertEquals(del.key.type, ba.getType());
+    IndexableRecord idx = new IndexableRecord(new Key("idx", "tp", "xxx"), "yyy", 1L);
+    ba = client.toBulkableAction(idx);
+    assertNotNull(ba);
+    assertSame(Index.class, ba.getClass());
+    assertEquals(idx.key.index, ba.getIndex());
+    assertEquals(idx.key.id, ba.getId());
+    assertEquals(idx.key.type, ba.getType());
+    assertEquals(idx.payload, ba.getData(null));
+    // upsert
+    client.setWriteMethod(JestElasticsearchClient.WriteMethod.UPSERT);
+    ba = client.toBulkableAction(idx);
+    assertNotNull(ba);
+    assertSame(Update.class, ba.getClass());
+    assertEquals(idx.key.index, ba.getIndex());
+    assertEquals(idx.key.id, ba.getId());
+    assertEquals(idx.key.type, ba.getType());
+    assertEquals("{\"doc\":" + idx.payload + ", \"doc_as_upsert\":true}", ba.getData(null));
   }
 
   private BulkResult createBulkResultFailure(String exception) {

@@ -1,26 +1,33 @@
-/**
- * Copyright 2016 Confluent Inc.
+/*
+ * Copyright 2018 Confluent Inc.
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not
- * use this file except in compliance with the License. You may obtain a copy of
- * the License at
+ * Licensed under the Confluent Community License (the "License"); you may not use
+ * this file except in compliance with the License.  You may obtain a copy of the
+ * License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.confluent.io/confluent-community-license
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
- * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
- * License for the specific language governing permissions and limitations under
- * the License.
- **/
+ * WARRANTIES OF ANY KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations under the License.
+ */
 
 package io.confluent.connect.elasticsearch.bulk;
 
 import io.confluent.connect.elasticsearch.ElasticsearchSinkConnectorConfig;
+import io.confluent.connect.elasticsearch.LogContext;
 import io.confluent.connect.elasticsearch.RetryUtil;
+
+import io.searchbox.core.BulkResult.BulkResultItem;
+import java.util.Collections;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.connect.errors.ConnectException;
+import org.apache.kafka.connect.sink.ErrantRecordReporter;
+import org.apache.kafka.connect.sink.SinkRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,6 +37,8 @@ import java.util.Deque;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -57,6 +66,7 @@ public class BulkProcessor<R, B> {
   private final int maxRetries;
   private final long retryBackoffMs;
   private final BehaviorOnMalformedDoc behaviorOnMalformedDoc;
+  private final ErrantRecordReporter reporter;
 
   private final Thread farmer;
   private final ExecutorService executor;
@@ -70,7 +80,9 @@ public class BulkProcessor<R, B> {
   // shared state, synchronized on (this), may be part of wait() conditions so need notifyAll() on
   // changes
   private final Deque<R> unsentRecords;
+  protected final ConcurrentMap<R, SinkRecord> recordsToReportOnError; // visible for tests
   private int inFlightRecords = 0;
+  private final LogContext logContext = new LogContext();
 
   public BulkProcessor(
       Time time,
@@ -81,7 +93,8 @@ public class BulkProcessor<R, B> {
       long lingerMs,
       int maxRetries,
       long retryBackoffMs,
-      BehaviorOnMalformedDoc behaviorOnMalformedDoc
+      BehaviorOnMalformedDoc behaviorOnMalformedDoc,
+      ErrantRecordReporter reporter
   ) {
     this.time = time;
     this.bulkClient = bulkClient;
@@ -91,8 +104,12 @@ public class BulkProcessor<R, B> {
     this.maxRetries = maxRetries;
     this.retryBackoffMs = retryBackoffMs;
     this.behaviorOnMalformedDoc = behaviorOnMalformedDoc;
+    this.reporter = reporter;
 
     unsentRecords = new ArrayDeque<>(maxBufferedRecords);
+    recordsToReportOnError = reporter != null
+        ? new ConcurrentHashMap<>(maxBufferedRecords)
+        : null;
 
     final ThreadFactory threadFactory = makeThreadFactory();
     farmer = threadFactory.newThread(farmerTask());
@@ -114,7 +131,7 @@ public class BulkProcessor<R, B> {
       public Thread newThread(Runnable r) {
         final int threadId = threadCounter.getAndIncrement();
         final int objId = System.identityHashCode(this);
-        final Thread t = new Thread(r, String.format("BulkProcessor@%d-%d", objId, threadId));
+        final Thread t = new BulkProcessorThread(logContext, r, objId, threadId);
         t.setDaemon(true);
         t.setUncaughtExceptionHandler(uncaughtExceptionHandler);
         return t;
@@ -122,16 +139,33 @@ public class BulkProcessor<R, B> {
     };
   }
 
-  private Runnable farmerTask() {
-    return new Runnable() {
-      @Override
-      public void run() {
+  // visible for testing
+  Runnable farmerTask() {
+    return () -> {
+      try (LogContext context = logContext.create("Farmer1")) {
         log.debug("Starting farmer task");
         try {
+          List<Future<BulkResponse>> futures = new ArrayList<>();
           while (!stopRequested) {
-            submitBatchWhenReady();
+            // submitBatchWhenReady waits for lingerMs so we won't spin here unnecessarily
+            futures.add(submitBatchWhenReady());
+
+            // after we submit, look at any previous futures that were completed and call get() on
+            // them so that exceptions are propagated.
+            List<Future<BulkResponse>> unfinishedFutures = new ArrayList<>();
+            for (Future<BulkResponse> f : futures) {
+              if (f.isDone()) {
+                BulkResponse resp = f.get();
+                log.debug("Bulk request completed with status {}", resp);
+              } else {
+                unfinishedFutures.add(f);
+              }
+            }
+            log.debug("Processing next batch with {} outstanding batch requests in flight",
+                    unfinishedFutures.size());
+            futures = unfinishedFutures;
           }
-        } catch (InterruptedException e) {
+        } catch (InterruptedException | ExecutionException e) {
           throw new ConnectException(e);
         }
         log.debug("Finished farmer task");
@@ -148,18 +182,34 @@ public class BulkProcessor<R, B> {
       // conditions hence the wait(0) in that case
       wait(Math.max(0, lingerMs - elapsedMs));
     }
+
     // at this point, either stopRequested or canSubmit
-    return stopRequested ? null : submitBatch();
+    return stopRequested
+            ? CompletableFuture.completedFuture(
+                    BulkResponse.failure(
+                        false,
+                        "request not submitted during shutdown",
+                        Collections.emptyMap()
+                    )
+            )
+            : submitBatch();
   }
 
   private synchronized Future<BulkResponse> submitBatch() {
-    assert !unsentRecords.isEmpty();
-    final int batchableSize = Math.min(batchSize, unsentRecords.size());
+    final int numUnsentRecords = unsentRecords.size();
+    assert numUnsentRecords > 0;
+    final int batchableSize = Math.min(batchSize, numUnsentRecords);
     final List<R> batch = new ArrayList<>(batchableSize);
     for (int i = 0; i < batchableSize; i++) {
       batch.add(unsentRecords.removeFirst());
     }
     inFlightRecords += batchableSize;
+    log.debug(
+        "Submitting batch of {} records; {} unsent and {} total in-flight records",
+        batchableSize,
+        numUnsentRecords,
+        inFlightRecords
+    );
     return executor.submit(new BulkTask(batch));
   }
 
@@ -190,8 +240,8 @@ public class BulkProcessor<R, B> {
    * this method if this is desirable.
    */
   public void stop() {
-    log.trace("stop");
-    stopRequested = true;
+    log.debug("stop");
+    stopRequested = true; // this stops the farmer task
     synchronized (this) {
       // shutdown the pool under synchronization to avoid rejected submissions
       executor.shutdown();
@@ -205,7 +255,6 @@ public class BulkProcessor<R, B> {
    * <p>This should only be called after a previous {@link #stop()} invocation.
    */
   public void awaitStop(long timeoutMs) {
-    log.trace("awaitStop {}", timeoutMs);
     assert stopRequested;
     try {
       if (!executor.awaitTermination(timeoutMs, TimeUnit.MILLISECONDS)) {
@@ -272,10 +321,16 @@ public class BulkProcessor<R, B> {
    * <p>If any task has failed prior to or while blocked in the add, or if the timeout expires
    * while blocked, {@link ConnectException} will be thrown.
    */
-  public synchronized void add(R record, long timeoutMs) {
+  public synchronized void add(R record, SinkRecord original, long timeoutMs) {
     throwIfTerminal();
 
-    if (bufferedRecords() >= maxBufferedRecords) {
+    int numBufferedRecords = bufferedRecords();
+    if (numBufferedRecords >= maxBufferedRecords) {
+      log.trace(
+          "Buffer full at {} records, so waiting up to {} ms before adding",
+          numBufferedRecords,
+          timeoutMs
+      );
       final long addStartTimeMs = time.milliseconds();
       for (long elapsedMs = time.milliseconds() - addStartTimeMs;
            !isTerminal() && elapsedMs < timeoutMs && bufferedRecords() >= maxBufferedRecords;
@@ -290,9 +345,16 @@ public class BulkProcessor<R, B> {
       if (bufferedRecords() >= maxBufferedRecords) {
         throw new ConnectException("Add timeout expired before buffer availability");
       }
+      log.debug(
+          "Adding record to queue after waiting {} ms",
+          time.milliseconds() - addStartTimeMs
+      );
+    } else {
+      log.trace("Adding record to queue");
     }
 
     unsentRecords.addLast(record);
+    addRecordToReport(record, original);
     notifyAll();
   }
 
@@ -303,7 +365,6 @@ public class BulkProcessor<R, B> {
    * thrown with that error.
    */
   public void flush(long timeoutMs) {
-    log.trace("flush {}", timeoutMs);
     final long flushStartTimeMs = time.milliseconds();
     try {
       flushRequested = true;
@@ -324,6 +385,45 @@ public class BulkProcessor<R, B> {
       throw new ConnectException(e);
     } finally {
       flushRequested = false;
+    }
+    log.debug("Flushed bulk processor (total time={} ms)", time.milliseconds() - flushStartTimeMs);
+  }
+
+  private void addRecordToReport(R record, SinkRecord original) {
+    if (reporter != null) {
+      // avoid unnecessary operations if not using the reporter
+      recordsToReportOnError.put(record, original);
+    }
+  }
+
+  private void removeReportedRecords(List<R> batch) {
+    if (reporter != null) {
+      // avoid unnecessary operations if not using the reporter
+      recordsToReportOnError.keySet().removeAll(batch);
+    }
+  }
+
+  private static final class BulkProcessorThread extends Thread {
+
+    private final LogContext parentContext;
+    private final int threadId;
+
+    public BulkProcessorThread(
+        LogContext parentContext,
+        Runnable target,
+        int objId,
+        int threadId
+    ) {
+      super(target, String.format("BulkProcessor@%d-%d", objId, threadId));
+      this.parentContext = parentContext;
+      this.threadId = threadId;
+    }
+
+    @Override
+    public void run() {
+      try (LogContext context = parentContext.create("Thread" + threadId)) {
+        super.run();
+      }
     }
   }
 
@@ -346,12 +446,12 @@ public class BulkProcessor<R, B> {
         failAndStop(e);
         throw e;
       }
-      log.debug("Successfully executed batch {} of {} records", batchId, batch.size());
       onBatchCompletion(batch.size());
       return rsp;
     }
 
     private BulkResponse execute() throws Exception {
+      final long startTime = System.currentTimeMillis();
       final B bulkReq;
       try {
         bulkReq = bulkClient.bulkRequest(batch);
@@ -362,6 +462,7 @@ public class BulkProcessor<R, B> {
             batch.size(),
             e
         );
+        removeReportedRecords(batch);
         throw e;
       }
       final int maxAttempts = maxRetries + 1;
@@ -372,15 +473,34 @@ public class BulkProcessor<R, B> {
                   batchId, batch.size(), attempts, maxAttempts);
           final BulkResponse bulkRsp = bulkClient.execute(bulkReq);
           if (bulkRsp.isSucceeded()) {
-            if (attempts > 1) {
-              // We only logged failures, so log the success immediately after a failure ...
-              log.debug("Completed batch {} of {} records with attempt {}/{}",
-                      batchId, batch.size(), attempts, maxAttempts);
+            if (log.isDebugEnabled()) {
+              log.debug(
+                  "Completed batch {} of {} records with attempt {}/{} in {} ms",
+                  batchId,
+                  batch.size(),
+                  attempts,
+                  maxAttempts,
+                  System.currentTimeMillis() - startTime
+              );
             }
+            removeReportedRecords(batch);
             return bulkRsp;
           } else if (responseContainsMalformedDocError(bulkRsp)) {
             retriable = bulkRsp.isRetriable();
             handleMalformedDoc(bulkRsp);
+            if (reporter != null) {
+              for (R record : batch) {
+                SinkRecord original = recordsToReportOnError.get(record);
+                BulkResultItem result = bulkRsp.failedRecords.get(record);
+                String error = result != null ? result.error : null;
+                if (error != null && original != null) {
+                  reporter.report(
+                      original, new ReportingException("Bulk request failed: " + error)
+                  );
+                }
+              }
+            }
+            removeReportedRecords(batch);
             return bulkRsp;
           } else {
             // for all other errors, throw the error up
@@ -395,9 +515,17 @@ public class BulkProcessor<R, B> {
                       + "will attempt retry after {} ms. Failure reason: {}",
                       batchId, batch.size(), attempts, maxAttempts, sleepTimeMs, e.getMessage());
             time.sleep(sleepTimeMs);
+            if (Thread.interrupted()) {
+              log.error(
+                      "Retrying batch {} of {} records interrupted after attempt {}/{}",
+                      batchId, batch.size(), attempts, maxAttempts, e);
+              removeReportedRecords(batch);
+              throw e;
+            }
           } else {
             log.error("Failed to execute batch {} of {} records after total of {} attempt(s)",
                     batchId, batch.size(), attempts, e);
+            removeReportedRecords(batch);
             throw e;
           }
         }
@@ -421,7 +549,7 @@ public class BulkProcessor<R, B> {
         case FAIL:
           log.error("Encountered an illegal document error when executing batch {} of {}"
                   + " records. Error was {} (to ignore future records like this"
-                  + " change the configuration property '%s' from '%s' to '%s').",
+                  + " change the configuration property '{}' from '{}' to '{}').",
               batchId, batch.size(), bulkRsp.getErrorInfo(),
               ElasticsearchSinkConnectorConfig.BEHAVIOR_ON_MALFORMED_DOCS_CONFIG,
               BehaviorOnMalformedDoc.FAIL,
@@ -439,7 +567,8 @@ public class BulkProcessor<R, B> {
 
   private boolean responseContainsMalformedDocError(BulkResponse bulkRsp) {
     return bulkRsp.getErrorInfo().contains("mapper_parsing_exception")
-        || bulkRsp.getErrorInfo().contains("illegal_argument_exception");
+        || bulkRsp.getErrorInfo().contains("illegal_argument_exception")
+        || bulkRsp.getErrorInfo().contains("action_request_validation_exception");
   }
 
   private synchronized void onBatchCompletion(int batchSize) {
@@ -506,13 +635,33 @@ public class BulkProcessor<R, B> {
       return result;
     }
 
-    public static BehaviorOnMalformedDoc forValue(String value) {
-      return valueOf(value.toUpperCase(Locale.ROOT));
-    }
-
     @Override
     public String toString() {
       return name().toLowerCase(Locale.ROOT);
+    }
+  }
+
+  /**
+   * Exception that hides the stack trace used for reporting errors from Elasticsearch
+   * (mapper_parser_exception, illegal_argument_exception, and action_request_validation_exception)
+   * resulting from bad records using the AK 2.6 reporter DLQ interface because the error did not
+   * come from that line due to multithreading.
+   */
+  @SuppressWarnings("serial")
+  public static class ReportingException extends RuntimeException {
+
+    public ReportingException(String message) {
+      super(message);
+    }
+
+    /**
+     * This method is overriden to swallow the stack trace.
+     *
+     * @return Throwable
+     */
+    @Override
+    public synchronized Throwable fillInStackTrace() {
+      return this;
     }
   }
 }

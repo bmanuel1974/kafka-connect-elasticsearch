@@ -1,17 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
         <groupId>io.confluent</groupId>
         <artifactId>common</artifactId>
-        <version>5.2.0-SNAPSHOT</version>
+        <version>6.0.0</version>
     </parent>
 
     <groupId>io.confluent</groupId>
     <artifactId>kafka-connect-elasticsearch</artifactId>
+    <version>10.1.0-SNAPSHOT</version>
     <packaging>jar</packaging>
     <name>kafka-connect-elasticsearch</name>
     <organization>
@@ -25,8 +24,8 @@
 
     <licenses>
         <license>
-            <name>Apache License 2.0</name>
-            <url>http://www.apache.org/licenses/LICENSE-2.0.html</url>
+            <name>Confluent Community License</name>
+            <url>http://www.confluent.io/confluent-community-license</url>
             <distribution>repo</distribution>
         </license>
     </licenses>
@@ -41,9 +40,13 @@
     <properties>
         <es.version>2.4.1</es.version>
         <lucene.version>5.5.2</lucene.version>
-        <jest.version>2.4.0</jest.version>
+        <hamcrest.version>1.3</hamcrest.version>
+        <mockito.version>2.28.2</mockito.version>
+        <jest.version>6.3.1</jest.version>
+        <test.containers.version>1.11.4</test.containers.version>
         <kafka.connect.maven.plugin.version>0.11.1</kafka.connect.maven.plugin.version>
         <confluent.maven.repo>http://packages.confluent.io/maven/</confluent.maven.repo>
+        <maven.release.plugin.version>2.5.3</maven.release.plugin.version>
     </properties>
 
     <repositories>
@@ -119,10 +122,70 @@
             <version>${lucene.version}</version>
             <scope>test</scope>
         </dependency>
+        <!--Require newer version than inherited-->
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+            <version>27.0.1-jre</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>connect-runtime</artifactId>
+            <version>${kafka.version}</version>
+            <classifier>test</classifier>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <!-- Use a repackaged version of log4j with security patches. Default log4j v1.2 is a transitive dependency of connect-runtime, but it is excluded in common/pom.xml -->
+        <dependency>
+            <groupId>io.confluent</groupId>
+            <artifactId>confluent-log4j</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>connect-runtime</artifactId>
+            <version>${kafka.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+            <version>${kafka.version}</version>
+            <classifier>test</classifier>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka_${kafka.scala.version}</artifactId>
+            <version>${kafka.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka_${kafka.scala.version}</artifactId>
+            <type>test-jar</type>
+            <classifier>test</classifier>
+            <scope>test</scope>
+            <version>${kafka.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>elasticsearch</artifactId>
+            <version>${test.containers.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>3.0.0-M3</version>
+            </plugin>
             <plugin>
                 <groupId>io.confluent</groupId>
                 <version>${kafka.connect.maven.plugin.version}</version>
@@ -134,9 +197,9 @@
                         </goals>
                         <configuration>
                             <title>Kafka Connect Elasticsearch</title>
-                            <documentationUrl>https://docs.confluent.io/${project.version}/connect/connect-elasticsearch/docs/index.html</documentationUrl>
+                            <documentationUrl>https://docs.confluent.io/${confluent.version}/connect/connect-elasticsearch/docs/index.html</documentationUrl>
                             <description>
-                                The Elasticsearch connector allows moving data from Kafka to Elasticsearch. It writes data from a topic in Kafka to an index in Elasticsearch and all data for a topic have the same type.
+                                The Elasticsearch connector allows moving data from Kafka to Elasticsearch 2.x, 5.x, 6.x, and 7.x. It writes data from a topic in Kafka to an index in Elasticsearch and all data for a topic have the same type.
 
                                 Elasticsearch is often used for text queries, analytics and as an key-value store (use cases). The connector covers both the analytics and key-value store use cases. For the analytics use case, each message is in Kafka is treated as an event and the connector uses topic+partition+offset as a unique identifier for events, which then converted to unique documents in Elasticsearch. For the key-value store use case, it supports using keys from Kafka messages as document ids in Elasticsearch and provides configurations ensuring that updates to a key are written to Elasticsearch in order. For both use cases, Elasticsearch’s idempotent write semantics guarantees exactly once delivery.
 
@@ -145,7 +208,7 @@
                             <logo>logos/elasticsearch.jpg</logo>
 
                             <supportProviderName>Confluent, Inc.</supportProviderName>
-                            <supportSummary>Confluent supports the Elasticsearch sink connector alongside community members as part of its Confluent Platform open source offering.</supportSummary>
+                            <supportSummary>Confluent supports the Elasticsearch sink connector alongside community members as part of its Confluent Platform offering.</supportSummary>
                             <supportUrl>https://docs.confluent.io/current/</supportUrl>
                             <supportLogo>logos/confluent.png</supportLogo>
 
@@ -154,10 +217,6 @@
                             <ownerName>Confluent, Inc.</ownerName>
                             <ownerUrl>https://confluent.io/</ownerUrl>
                             <ownerLogo>logos/confluent.png</ownerLogo>
-
-                            <dockerNamespace>confluentinc</dockerNamespace>
-                            <dockerName>cp-kafka-connect</dockerName>
-                            <dockerTag>${project.version}</dockerTag>
 
                             <componentTypes>
                                 <componentType>sink</componentType>
@@ -172,7 +231,7 @@
                             </tags>
 
                             <requirements>
-                                <requirement>Elasticsearch 2.x, 5.x, or 6.x</requirement>
+                                <requirement>Elasticsearch 2.x, 5.x, 6.x, o4r 7.x</requirement>
                             </requirements>
 
                             <deliveryGuarantee>
@@ -190,7 +249,7 @@
                 <inherited>true</inherited>
                 <configuration>
                     <compilerArgs>
-                        <arg>-Xlint:all</arg>
+                        <arg>-Xlint:all,-try</arg>
                         <arg>-Werror</arg>
                     </compilerArgs>
                 </configuration>
@@ -237,6 +296,16 @@
                     </execution>
                 </executions>
             </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-release-plugin</artifactId>
+                <version>${maven.release.plugin.version}</version>
+                <configuration>
+                    <autoVersionSubmodules>true</autoVersionSubmodules>
+                    <remoteTagging>false</remoteTagging>
+                    <tagNameFormat>v@{project.version}</tagNameFormat>
+                </configuration>
+            </plugin>
         </plugins>
 
         <resources>
@@ -264,6 +333,29 @@
             </build>
         </profile>
         <profile>
+            <id>jenkins</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <version>3.0.0-M3</version>
+                        <configuration>
+                            <excludes>
+                                <!--
+                                The jenkins container is only accessible through its DOCKER_HOST IP
+                                address. This makes it hard to test both hostname verification
+                                enabled and disabled cases with the same cert. So, disable this IT
+                                in jenkins and only test the enabled case in SecurityIT.
+                                -->
+                                <exclude>**/HostnameVerificationDisabledIT.java</exclude>
+                            </excludes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
             <id>licenses-package</id>
             <build>
                 <plugins>
@@ -285,7 +377,7 @@
                                         <argument>-l ${project.build.directory}/${project.build.finalName}-package/share/doc/kafka-connect-elasticsearch/licenses</argument>
                                         <argument>-n ${project.build.directory}/${project.build.finalName}-package/share/doc/kafka-connect-elasticsearch/notices</argument>
                                         <argument>-t ${project.name}</argument>
-                                        <argument>-x licenses-${project.version}.jar</argument>
+                                        <argument>-x licenses-${confluent.version}.jar</argument>
                                     </arguments>
                                 </configuration>
                                 <phase>package</phase>
@@ -306,7 +398,7 @@
                             <dependency>
                                 <groupId>io.confluent</groupId>
                                 <artifactId>licenses</artifactId>
-                                <version>${project.version}</version>
+                                <version>${confluent.version}</version>
                             </dependency>
                         </dependencies>
                     </plugin>
@@ -335,7 +427,7 @@
                                         <argument>-l ${project.basedir}/licenses</argument>
                                         <argument>-n ${project.basedir}/notices</argument>
                                         <argument>-t ${project.name}</argument>
-                                        <argument>-x licenses-${project.version}.jar</argument>
+                                        <argument>-x licenses-${confluent.version}.jar</argument>
                                     </arguments>
                                 </configuration>
                                 <phase>package</phase>
@@ -356,7 +448,7 @@
                             <dependency>
                                 <groupId>io.confluent</groupId>
                                 <artifactId>licenses</artifactId>
-                                <version>${project.version}</version>
+                                <version>${confluent.version}</version>
                             </dependency>
                         </dependencies>
                     </plugin>
